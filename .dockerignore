@@ -1,0 +1,22 @@
+.git/
+.venv/
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+uv.lock
+OmniVoice API/
+examples/
+docs/
+*.bat
+test_*.py
+CHANGELOG_API.md
+POSTMAN_TESTE.md
+# voice.wav is large (89 MB) — mount it as a volume via docker-compose instead
+voice.wav

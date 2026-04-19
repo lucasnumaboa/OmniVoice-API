@@ -1,0 +1,27 @@
+services:
+  omnivoice-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: omnivoice-api:latest
+    container_name: omnivoice-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8001}:8001"
+    env_file:
+      - .env
+    volumes:
+      # Persistent HuggingFace model cache (avoids re-downloading on restart)
+      - hf_cache:/app/.cache/huggingface
+      # Default voice file for cloning (mount your own voice.wav here)
+      - ./voice.wav:/app/voice.wav:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  hf_cache:
