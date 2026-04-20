@@ -31,6 +31,7 @@
 - [Docker](#docker)
 - [Endpoints](#endpoints)
 - [Exemplos de Chamadas](#exemplos-de-chamadas)
+- [Processamento em Batch](#processamento-em-batch)
 - [Parâmetros](#parâmetros)
 - [Idiomas Suportados](#idiomas-suportados)
 - [Solução de Problemas](#solução-de-problemas)
@@ -44,6 +45,7 @@
 - **Clonagem de voz** — envie um áudio de referência e replique qualquer voz
 - **Voz padrão automática** — usa `voice.wav` quando nenhuma referência é enviada
 - **600+ idiomas** — detecção automática ou seleção manual
+- **Processamento em batch** — endpoint `/batch` para múltiplos textos numa única chamada, maximizando o throughput da GPU
 - **Ngrok integrado** — exponha a API publicamente com `--share`
 - **CORS habilitado** — pronto para integração com front-ends
 - **Docker ready** — imagem pronta para CPU e GPU (CUDA)
@@ -279,6 +281,52 @@ O campo `audio_base64` é um arquivo WAV codificado em Base64.
 
 ---
 
+### `POST /api/v1/voice-conversion/batch`
+
+Converte múltiplos textos em fala numa única chamada, processando-os em lotes na GPU para máximo desempenho.
+
+**Content-Type:** `multipart/form-data`
+
+#### Parâmetros
+
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|-----------|------|:-----------:|-----------|
+| `items` | `string` (JSON) | ✅ | Array JSON de objetos `{text, language?, speed?, duration?}` |
+| `batch_size` | `integer` | ❌ | Número de itens por chamada de GPU (padrão: `4`) |
+| `ref_audio` | `file` | ❌ | Áudio de referência compartilhado por todos os itens (usa `voice.wav` se omitido) |
+| `ref_text` | `string` | ❌ | Transcrição do áudio de referência (auto-transcrito se omitido) |
+| `num_step` | `integer` | ❌ | Passos de inferência compartilhados (padrão: `32`) |
+| `guidance_scale` | `float` | ❌ | Escala de orientação compartilhada (padrão: `2.0`) |
+| `denoise` | `boolean` | ❌ | Redução de ruído compartilhada (padrão: `true`) |
+
+#### Formato do campo `items`
+
+```json
+[
+  {"text": "Olá, como você está?", "language": "Portuguese"},
+  {"text": "Hello, how are you?", "language": "English", "speed": 1.2},
+  {"text": "Bonjour le monde.", "language": "French", "duration": 3.5}
+]
+```
+
+#### Resposta
+
+```json
+{
+  "results": [
+    {"audio_base64": "UklGRiQ...", "sample_rate": 24000, "message": "Audio generated successfully"},
+    {"audio_base64": "UklGRiQ...", "sample_rate": 24000, "message": "Audio generated successfully"}
+  ],
+  "total": 2,
+  "batch_size": 4,
+  "message": "Batch completed: 2 items processed"
+}
+```
+
+Os resultados são retornados **na mesma ordem** dos itens de entrada.
+
+---
+
 ## Exemplos de Chamadas
 
 ### Python — `requests`
@@ -384,6 +432,102 @@ curl http://localhost:8001/health
 
 ---
 
+## Processamento em Batch
+
+O endpoint `/batch` envia múltiplos textos para o modelo de uma só vez, eliminando o aviso:
+
+> *You seem to be using the pipelines sequentially on GPU. In order to maximize efficiency please use a dataset*
+
+O parâmetro `batch_size` controla quantos itens são processados **por chamada de GPU**. Valores maiores aproveitam mais a paralelização da GPU mas consomem mais VRAM.
+
+### Python — `requests`
+
+```python
+import requests
+import base64
+import json
+
+url = "http://localhost:8001/api/v1/voice-conversion/batch"
+
+items = [
+    {"text": "Olá, este é o primeiro áudio.", "language": "Portuguese"},
+    {"text": "Hello, this is the second audio.", "language": "English"},
+    {"text": "Hola, este es el tercer audio.", "language": "Spanish"},
+    {"text": "Bonjour, c'est le quatrième audio.", "language": "French"},
+]
+
+data = {
+    "items": json.dumps(items),
+    "batch_size": 4,
+    "num_step": 32,
+    "guidance_scale": 2.0,
+    "denoise": True,
+}
+
+response = requests.post(url, data=data)
+result = response.json()
+
+for i, item_result in enumerate(result["results"]):
+    audio_bytes = base64.b64decode(item_result["audio_base64"])
+    with open(f"output_{i}.wav", "wb") as f:
+        f.write(audio_bytes)
+
+print(f'Processados: {result["total"]} áudios')
+```
+
+### Python — batch com clonagem de voz
+
+```python
+import requests
+import base64
+import json
+
+url = "http://localhost:8001/api/v1/voice-conversion/batch"
+
+items = [
+    {"text": "Primeiro texto a sintetizar."},
+    {"text": "Segundo texto a sintetizar."},
+    {"text": "Terceiro texto.", "speed": 0.9},
+]
+
+data = {
+    "items": json.dumps(items),
+    "batch_size": 4,
+}
+
+files = {
+    "ref_audio": open("minha_voz.wav", "rb")
+}
+
+response = requests.post(url, data=data, files=files)
+result = response.json()
+
+for i, item_result in enumerate(result["results"]):
+    audio_bytes = base64.b64decode(item_result["audio_base64"])
+    with open(f"batch_output_{i}.wav", "wb") as f:
+        f.write(audio_bytes)
+```
+
+### cURL
+
+```bash
+curl -X POST "http://localhost:8001/api/v1/voice-conversion/batch" \
+  -F 'items=[{"text":"Primeiro texto","language":"Portuguese"},{"text":"Second text","language":"English"}]' \
+  -F "batch_size=4" \
+  -F "num_step=32"
+```
+
+### Escolhendo o `batch_size` ideal
+
+| VRAM disponível | `batch_size` recomendado |
+|-----------------|-------------------------|
+| 4 GB | 2 |
+| 8 GB | 4 |
+| 16 GB | 8 |
+| 24 GB+ | 16+ |
+
+---
+
 ## Parâmetros
 
 | Parâmetro | Intervalo | Padrão | Efeito |
@@ -441,6 +585,10 @@ python -m omnivoice.api
 **Primeira requisição lenta**
 
 Normal — o modelo é carregado na primeira inferência. As seguintes serão mais rápidas.
+
+**Aviso `pipelines sequentially on GPU`**
+
+Use o endpoint `/api/v1/voice-conversion/batch` em vez de fazer múltiplas chamadas ao `/api/v1/voice-conversion`. O endpoint batch passa uma lista de textos diretamente ao modelo, eliminando o processamento sequencial.
 
 ---
 
